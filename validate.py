@@ -135,26 +135,137 @@ def validate_invoice(data, schema=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Validate extracted invoice JSON (V1–V7)")
-    parser.add_argument("json_path", help="Path to extracted invoice JSON")
-    parser.add_argument("--schema", default="output_schema.json", help="Path to assignment JSON schema")
+    parser.add_argument("json_path", help="Path to extracted invoice JSON or directory")
+    parser.add_argument("--schema", default="output_schema.json",
+                        help="Path to assignment JSON schema")
     parser.add_argument("--report", help="Optional path to write validation report JSON")
     args = parser.parse_args()
 
-    data = json.loads(Path(args.json_path).read_text(encoding="utf-8"))
+    input_path = Path(args.json_path)
     schema_path = Path(args.schema)
     schema = json.loads(schema_path.read_text(encoding="utf-8")) if schema_path.exists() else None
-    report = validate_invoice(data, schema)
 
-    for check in report["checks"]:
-        print(f"[{check['status']}] {check['rule']}: {check['message']}")
-    summary = report["summary"]
-    print(f"\nSummary: {summary['passed']} passed, {summary['failures']} failed, {summary['warnings']} warning(s)")
-    if args.report:
-        output = Path(args.report)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"Report written to: {output}")
-    raise SystemExit(1 if summary["failures"] else 0)
+    if input_path.is_dir():
+        json_files = sorted(
+            path for path in input_path.glob("*.json")
+            if path.name != "validation_report.json"
+        )
+
+        if not json_files:
+            parser.error(f"No JSON files found in directory: {input_path}")
+
+        reports = []
+
+        for json_file in json_files:
+            data = json.loads(json_file.read_text(encoding="utf-8"))
+            report = validate_invoice(data, schema)
+            report["file"] = json_file.name
+            reports.append(report)
+
+        lines = [
+            "# Invoice Validation Report",
+            "",
+            f"Files validated: {len(reports)}",
+            "",
+            "| File | Document Number | Passed | Failed | Warnings |",
+            "|---|---|---:|---:|---:|",
+        ]
+
+        total_passed = 0
+        total_failures = 0
+        total_warnings = 0
+
+        for report in reports:
+            summary = report["summary"]
+            total_passed += summary["passed"]
+            total_failures += summary["failures"]
+            total_warnings += summary["warnings"]
+
+            lines.append(
+                f"| {report['file']} "
+                f"| {report.get('document_number') or 'N/A'} "
+                f"| {summary['passed']} "
+                f"| {summary['failures']} "
+                f"| {summary['warnings']} |"
+            )
+
+        lines.extend([
+            "",
+            "## Detailed Results",
+            "",
+        ])
+
+        for report in reports:
+            lines.extend([
+                f"### {report['file']} "
+                f"({report.get('document_number') or 'N/A'})",
+                "",
+            ])
+
+            for check in report["checks"]:
+                lines.append(
+                    f"- **[{check['status']}] {check['rule']}**: "
+                    f"{check['message']}"
+                )
+
+            lines.append("")
+
+        lines.extend([
+            "## Overall Summary",
+            "",
+            f"- Checks passed: {total_passed}",
+            f"- Checks failed: {total_failures}",
+            f"- Warnings: {total_warnings}",
+            "",
+        ])
+
+        markdown_report = input_path / "validation_report.md"
+        markdown_report.write_text(
+            "\n".join(lines),
+            encoding="utf-8"
+        )
+
+        print(f"Files validated: {len(reports)}")
+        print(f"Checks passed: {total_passed}")
+        print(f"Checks failed: {total_failures}")
+        print(f"Warnings: {total_warnings}")
+        print(f"\nMarkdown report written to: {markdown_report}")
+
+        if args.report:
+            output = Path(args.report)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(reports, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            print(f"JSON report written to: {output}")
+
+        raise SystemExit(1 if total_failures else 0)
+
+    else:
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+        report = validate_invoice(data, schema)
+
+        for check in report["checks"]:
+            print(f"[{check['status']}] {check['rule']}: {check['message']}")
+
+        summary = report["summary"]
+        print(
+            f"\nSummary: {summary['passed']} passed, "
+            f"{summary['failures']} failed, "
+            f"{summary['warnings']} warning(s)"
+        )
+
+        if args.report:
+            output = Path(args.report)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            print(f"Report written to: {output}")
+
+        raise SystemExit(1 if summary["failures"] else 0)
 
 
 if __name__ == "__main__":
